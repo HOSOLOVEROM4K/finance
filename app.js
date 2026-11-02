@@ -138,55 +138,91 @@ function getExpenses(y, m) {
   return expenses[k] || (expenses[k] = []);
 }
 
-/* ---------- Хранилище: Telegram CloudStorage (в браузере — localStorage) ----------
-   У CloudStorage лимит 4096 символов на значение, поэтому большие значения
-   режем на куски: key_0, key_1 … Количество кусков хранится в ключе "index". */
-const store = (() => {
+/* ---------- Хранилище: сначала телефон, потом облако Telegram ----------
+   Каждое изменение сразу пишется в память телефона (localStorage) — это мгновенно
+   и работает без связи. Затем отправляется в Telegram CloudStorage. Если связь
+   плохая — помечаем «есть несинхронизированное» и досылаем всё при следующей записи
+   или следующем запуске. При запуске берём более свежую версию (по метке _t).
+   У CloudStorage лимит 4096 символов на значение, поэтому большие значения режем
+   на куски key_0, key_1 …; количество кусков хранится в ключе "index". */
+const LS = {
+  get: k => { try { return localStorage.getItem('fin_' + k) ?? ''; } catch (e) { return ''; } },
+  set: (k, v) => { try { localStorage.setItem('fin_' + k, v); } catch (e) {} },
+  del: k => { try { localStorage.removeItem('fin_' + k); } catch (e) {} },
+};
+const cloud = (() => {
   const cs = tg?.CloudStorage && tg.isVersionAtLeast?.('6.9') ? tg.CloudStorage : null;
-  const call = fn => new Promise((res, rej) => fn((err, val) => err ? rej(err) : res(val)));
-  const ls = {
-    get: k => { try { return localStorage.getItem('fin_' + k) ?? ''; } catch (e) { return ''; } },
-    set: (k, v) => { try { localStorage.setItem('fin_' + k, v); } catch (e) {} },
-    del: k => { try { localStorage.removeItem('fin_' + k); } catch (e) {} },
-  };
+  if (!cs) return null;
+  const call = fn => new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error('timeout')), 8000);
+    fn((err, val) => { clearTimeout(t); err ? rej(err) : res(val); });
+  });
   return {
-    cloud: !!cs,
-    async getMany(keys) {
+    async get(keys) {
       const out = {};
-      for (let i = 0; i < keys.length; i += 50) {
-        const part = keys.slice(i, i + 50);
-        if (cs) Object.assign(out, await call(cb => cs.getItems(part, cb)));
-        else part.forEach(k => out[k] = ls.get(k));
-      }
+      for (let i = 0; i < keys.length; i += 50) Object.assign(out, await call(cb => cs.getItems(keys.slice(i, i + 50), cb)));
       return out;
     },
-    set: (k, v) => cs ? call(cb => cs.setItem(k, v, cb)) : (ls.set(k, v), Promise.resolve()),
-    remove: keys => cs ? call(cb => cs.removeItems(keys, cb)) : (keys.forEach(ls.del), Promise.resolve()),
+    set: (k, v) => call(cb => cs.setItem(k, v, cb)),
+    remove: keys => call(cb => cs.removeItems(keys, cb)),
   };
 })();
 
 const CHUNK = 4000;
-let chunkIndex = {};          // { accounts: 1, debts: 1, cats: 1, e2026_11: 2, … }
+let chunkIndex = {};          // { _t: время, accounts: 1, debts: 1, cats: 1, e2026_11: 2, … }
 let saveChain = Promise.resolve();
+const keysOf = idx => {
+  const out = [];
+  for (const [k, n] of Object.entries(idx)) if (k !== '_t') for (let i = 0; i < n; i++) out.push(`${k}_${i}`);
+  return out;
+};
+const parseJSON = s => { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } };
+
+let offlineShown = false;
+function markOffline() {
+  LS.set('pending', '1');
+  if (!offlineShown) { offlineShown = true; toast('Нет связи с Telegram — сохранено на телефоне'); }
+}
+
+// дослать в облако всё, что лежит на телефоне
+async function pushAll() {
+  for (const k of keysOf(chunkIndex)) await cloud.set(k, LS.get(k));
+  await cloud.set('index', JSON.stringify(chunkIndex));
+  LS.del('pending');
+  if (offlineShown) { offlineShown = false; toast('Синхронизировано'); }
+}
 
 async function writeBig(key, value) {
   const parts = [];
   for (let i = 0; i < value.length; i += CHUNK) parts.push(value.slice(i, i + CHUNK));
   if (!parts.length) parts.push('');
   const old = chunkIndex[key] || 0;
-  for (let i = 0; i < parts.length; i++) await store.set(`${key}_${i}`, parts[i]);
-  if (old > parts.length) {
-    const extra = [];
-    for (let i = parts.length; i < old; i++) extra.push(`${key}_${i}`);
-    await store.remove(extra);
-  }
   chunkIndex[key] = parts.length;
-  await store.set('index', JSON.stringify(chunkIndex));
+  chunkIndex._t = Date.now();
+
+  // 1) телефон — всегда
+  parts.forEach((p, i) => LS.set(`${key}_${i}`, p));
+  for (let i = parts.length; i < old; i++) LS.del(`${key}_${i}`);
+  LS.set('index', JSON.stringify(chunkIndex));
+
+  // 2) облако — если получится
+  if (!cloud) return;
+  try {
+    if (LS.get('pending')) return await pushAll();
+    for (let i = 0; i < parts.length; i++) await cloud.set(`${key}_${i}`, parts[i]);
+    if (old > parts.length) {
+      const extra = [];
+      for (let i = parts.length; i < old; i++) extra.push(`${key}_${i}`);
+      await cloud.remove(extra);
+    }
+    await cloud.set('index', JSON.stringify(chunkIndex));
+  } catch (err) {
+    console.error(err);
+    markOffline();
+  }
 }
 function persist(key, value) {
-  saveChain = saveChain
-    .then(() => writeBig(key, value))
-    .catch(err => { console.error(err); toast('Не удалось сохранить'); });
+  saveChain = saveChain.then(() => writeBig(key, value)).catch(err => console.error(err));
   return saveChain;
 }
 
@@ -200,15 +236,40 @@ function saveMonth(y, m) {
 }
 
 async function load() {
-  const idx = (await store.getMany(['index'])).index;
-  try { chunkIndex = idx ? JSON.parse(idx) : {}; } catch (e) { chunkIndex = {}; }
-  const keys = [];
-  for (const [k, n] of Object.entries(chunkIndex)) for (let i = 0; i < n; i++) keys.push(`${k}_${i}`);
-  const raw = await store.getMany(keys);
+  const localIdx = parseJSON(LS.get('index'));
+  const pending = !!LS.get('pending');
+  let raw = null, cloudOk = false, cloudIdx = null;
+
+  if (cloud) {
+    try {
+      cloudIdx = parseJSON((await cloud.get(['index'])).index);
+      cloudOk = true;
+    } catch (e) { console.error(e); }
+  }
+  const localNewer = localIdx && (pending || (localIdx._t || 0) > (cloudIdx?._t || 0));
+
+  if (cloudOk && cloudIdx && !localNewer) {
+    // берём из облака и обновляем копию на телефоне
+    try {
+      chunkIndex = cloudIdx;
+      raw = await cloud.get(keysOf(chunkIndex));
+      Object.entries(raw).forEach(([k, v]) => LS.set(k, v));
+      LS.set('index', JSON.stringify(chunkIndex));
+    } catch (e) { console.error(e); raw = null; }
+  }
+  if (!raw && localIdx) {
+    // берём с телефона
+    chunkIndex = localIdx;
+    raw = Object.fromEntries(keysOf(chunkIndex).map(k => [k, LS.get(k)]));
+    if (cloudOk) saveChain = saveChain.then(pushAll).catch(() => markOffline());
+    else if (cloud) markOffline();
+  }
+  if (!raw) { chunkIndex = {}; raw = {}; if (cloud && !cloudOk) toast('Нет связи с Telegram'); }
+
   const read = k => {
     let str = '';
     for (let i = 0; i < (chunkIndex[k] || 0); i++) str += raw[`${k}_${i}`] || '';
-    try { return str ? JSON.parse(str) : []; } catch (e) { console.error('bad data', k); return []; }
+    return parseJSON(str) || [];
   };
   const ymd = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 
