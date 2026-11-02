@@ -36,13 +36,28 @@
       <div class="eyebrow">Потрачено за месяц</div>
       <div class="hero-amount num" id="ovTotal"></div>
       <div class="hero-sub" id="ovDelta"></div>
+      <div class="hero-sub pace num" id="ovPace"></div>
       <div class="flow" id="ovFlow"></div>
     </div>
 
     <div class="card">
-      <div class="card-head"><span>Категории</span><button class="link" data-action="tab" data-tab="expenses">Подробнее</button></div>
+      <div class="card-head"><span>Категории</span>
+        <span class="head-links"><button class="link" data-action="limit">Лимиты</button><button class="link" data-action="tab" data-tab="expenses">Подробнее</button></span>
+      </div>
       <div class="stack" id="ovStack"></div>
       <ul class="cat-rows" id="ovCats"></ul>
+    </div>
+
+    <div class="card" id="ovLimitsCard" hidden>
+      <div class="card-head"><span>Лимиты на месяц</span><button class="link" data-action="limit">Добавить</button></div>
+      <div id="ovLimits"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span>Последние 6 месяцев</span>
+        <span class="legend"><i class="lg-exp"></i>траты <i class="lg-inc"></i>доходы</span>
+      </div>
+      <div class="months" id="ovMonths"></div>
     </div>
 
     <div class="mini-grid">
@@ -56,6 +71,11 @@
         <b class="num" id="ovMoney"></b>
         <small id="ovMoneySub"></small>
       </button>
+    </div>
+
+    <div class="card list-card" id="ovRecurCard" hidden>
+      <div class="card-head pad-top"><span>Регулярные платежи</span></div>
+      <div id="ovRecur"></div>
     </div>
 
     <div class="card list-card">
@@ -78,6 +98,7 @@
         <svg viewBox="0 0 100 100" id="exDonut"></svg>
         <div class="donut-center"><b class="num" id="exTotal"></b><span id="exCount"></span></div>
       </div>
+      <div class="ex-limit num" id="exLimit" hidden></div>
     </div>
     <div class="chips" id="exChips"></div>
     <div id="exList"></div>
@@ -117,15 +138,27 @@
     <div class="card list-card" id="acList"></div>
     <button class="btn btn-ghost" data-action="add-account">Добавить счёт</button>
 
+    <div class="section-label">Цель</div>
+    <div id="acGoal"></div>
+
     <div class="section-label">Данные</div>
-    <div class="card backup-card">
-      <div class="backup-text">
-        <div>Резервная копия</div>
-        <div class="tx-sub" id="bkInfo"></div>
+    <div class="card data-card">
+      <div class="data-row">
+        <div class="backup-text">
+          <div>Резервная копия</div>
+          <div class="tx-sub" id="bkInfo"></div>
+        </div>
+        <div class="backup-btns">
+          <button class="settle" data-action="restore">Восстановить</button>
+          <button class="settle primary" data-action="backup">Сохранить</button>
+        </div>
       </div>
-      <div class="backup-btns">
-        <button class="settle" data-action="restore">Восстановить</button>
-        <button class="settle primary" data-action="backup">Сохранить</button>
+      <div class="data-row">
+        <div class="backup-text">
+          <div>Выгрузка в Excel</div>
+          <div class="tx-sub">Все операции одной таблицей (CSV)</div>
+        </div>
+        <button class="settle" data-action="csv">Выгрузить</button>
       </div>
       <input type="file" id="bkFile" accept=".json,application/json" hidden>
     </div>
@@ -144,17 +177,18 @@
   </div>
 </nav>
 
-<!-- ШТОРКА ДОБАВЛЕНИЯ -->
+<!-- ШТОРКА -->
 <div class="backdrop" data-action="close"></div>
 <div class="sheet" id="sheet">
   <div class="grabber"></div>
-  <div class="segment four" id="fSeg" data-for="expense income debt account">
+  <div class="segment five" id="fSeg">
     <button data-action="seg" data-mode="expense">Трата</button>
     <button data-action="seg" data-mode="income">Доход</button>
+    <button data-action="seg" data-mode="transfer">Перевод</button>
     <button data-action="seg" data-mode="debt">Долг</button>
     <button data-action="seg" data-mode="account">Счёт</button>
   </div>
-  <div class="sheet-title" data-for="acc-edit">Изменить счёт</div>
+  <div class="sheet-title" id="fTitle" hidden></div>
   <div class="segment two" id="fDebtDir" data-for="debt">
     <button data-action="debt-dir" data-dir="in">Мне должны</button>
     <button data-action="debt-dir" data-dir="out">Я должен</button>
@@ -165,6 +199,7 @@
     <span class="cur">₽</span>
   </label>
 
+  <!-- категории трат -->
   <div data-for="expense">
     <div class="cat-grid" id="fCats"></div>
     <div class="more-panel" id="fMore" hidden>
@@ -176,27 +211,61 @@
     </div>
   </div>
 
+  <!-- категории доходов -->
   <div class="cat-grid three" id="fIncCats" data-for="income"></div>
 
+  <!-- счёт для траты / дохода -->
   <div data-for="expense income">
     <div class="field-label" id="fAccLabel">Списать со счёта</div>
     <div class="chips sheet-chips" id="fAccs"></div>
   </div>
 
+  <!-- перевод -->
+  <div data-for="transfer" id="fTrWrap">
+    <div class="field-label">Откуда</div>
+    <div class="chips sheet-chips" id="fFrom"></div>
+    <div class="field-label">Куда</div>
+    <div class="chips sheet-chips" id="fTo"></div>
+  </div>
+
+  <!-- лимит -->
+  <div data-for="limit">
+    <div class="field-label">Категория</div>
+    <div class="chips wrap sheet-chips" id="fLimitCats"></div>
+  </div>
+
   <div class="type-grid" id="fTypes" data-for="account acc-edit"></div>
 
-  <label class="field" data-for="debt account acc-edit" id="fNameWrap">
+  <label class="field" data-for="debt account acc-edit goal" id="fNameWrap">
     <span id="fNameIcon"></span><input id="fName" placeholder="Кто должен" autocomplete="off">
   </label>
-  <label class="field" data-for="expense income debt">
+
+  <!-- счёт для долга -->
+  <div data-for="debt">
+    <div class="field-label" id="fDebtAccLabel">Деньги ушли со счёта</div>
+    <div class="chips sheet-chips" id="fDebtAccs"></div>
+  </div>
+
+  <!-- счёт для цели -->
+  <div data-for="goal">
+    <div class="field-label">Где копишь</div>
+    <div class="chips sheet-chips" id="fGoalAccs"></div>
+  </div>
+
+  <label class="field" data-for="expense income transfer debt">
     <span data-icon="note"></span><input id="fNote" placeholder="Комментарий" autocomplete="off">
   </label>
-  <label class="field" data-for="expense income debt">
+  <div class="chips sugg" id="fSugg" hidden></div>
+  <label class="field" data-for="expense income transfer debt">
     <span data-icon="calendar"></span><input id="fDate" type="date">
   </label>
 
+  <div class="opts" id="fOpts">
+    <button class="opt" id="fOptRepeat" data-action="opt-repeat"><span data-icon="repeat"></span>Каждый месяц</button>
+  </div>
+
   <button class="btn" data-action="save" id="fSave">Сохранить</button>
-  <button class="btn-danger" data-action="del-acc-sheet" data-for="acc-edit">Удалить счёт</button>
+  <button class="btn-danger" data-action="sheet-del" id="fDel" hidden></button>
 </div>
 
 <div class="toast" id="toast"></div>
