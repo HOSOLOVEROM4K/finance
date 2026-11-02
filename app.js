@@ -256,7 +256,8 @@ function persist(key, value) {
 // компактные форматы — чтобы влезало больше
 const saveAccounts = () => persist('accounts', JSON.stringify(accounts.map(a => [a.id, a.name, a.type, a.color, a.balance])));
 const saveDebts = () => persist('debts', JSON.stringify(debts.map(d => [d.id, d.name, d.amount, d.note, isoDate(d.date), d.closed ? 1 : 0, d.ts || 0, d.dir || 'in', d.acc || ''])));
-const saveCats = () => persist('cats', JSON.stringify(EXTRA.filter(c => c.custom).map(c => [c.id, c.name, c.color])));
+const saveCats = () => persist('cats', JSON.stringify([...CATEGORIES, ...EXTRA].filter(c => c.custom).map(c => [c.id, c.name, c.color])));
+const saveCatOrder = () => persist('catorder', JSON.stringify({ main: CATEGORIES.map(c => c.id), extra: EXTRA.map(c => c.id) }));
 const saveRecurring = () => persist('recurring', JSON.stringify(recurring.map(r => [r.id, r.day, r.amount, r.cat, r.acc || '', r.note, r.last])));
 const saveLimits = () => persist('limits', JSON.stringify(limits));
 const saveGoal = () => persist('goal', JSON.stringify(goal ? [goal.name, goal.target, goal.acc || ''] : []));
@@ -306,6 +307,19 @@ async function load() {
   const ymd = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 
   read('cats').forEach(([id, name, color]) => EXTRA.splice(EXTRA.length - 1, 0, { id, name, color, icon: 'tag', custom: true }));
+  // свой порядок категорий (какие в сетке, какие в «Другое»)
+  const order = read('catorder');
+  if (order && Array.isArray(order.main)) {
+    const pool = Object.fromEntries([...CATEGORIES, ...EXTRA].map(c => [c.id, c]));
+    const main = order.main.map(id => pool[id]).filter(Boolean);
+    if (main.length === CATEGORIES.length) {
+      const used = new Set(main.map(c => c.id));
+      const extra = (order.extra || []).map(id => pool[id]).filter(c => c && !used.has(c.id));
+      Object.values(pool).forEach(c => { if (!used.has(c.id) && !extra.includes(c)) extra.push(c); });
+      CATEGORIES.splice(0, CATEGORIES.length, ...main);
+      EXTRA.splice(0, EXTRA.length, ...extra);
+    }
+  }
   rebuildCat();
   read('accounts').forEach(([id, name, type, color, balance]) => accounts.push({ id, name, type, color, balance }));
   read('debts').forEach(([id, name, amount, note, date, closed, ts, dir, acc]) =>
@@ -426,6 +440,7 @@ const state = {
   trTo: null,
   optRepeat: false,
   limitCat: 'cafe',
+  swapFrom: null,     // категория, которую переставляем
   goalAcc: null,
 };
 const isCurrentMonth = () => state.month.getFullYear() === today.getFullYear() && state.month.getMonth() === today.getMonth();
@@ -863,20 +878,70 @@ const sheet = $('#sheet'), backdrop = $('.backdrop');
 const fAmount = $('#fAmount'), fName = $('#fName'), fNote = $('#fNote'), fDate = $('#fDate');
 
 function renderCatGrid() {
+  const sw = state.swapFrom;
   const extraSel = isExtra(state.cat) ? CAT[state.cat] : null;
   const other = extraSel || { name: 'Другое', color: '#7a8088', icon: 'dots' };
+  const cls = c => [sw ? 'wiggle' : '', sw === c.id ? 'swap-src' : '', !sw && state.cat === c.id ? 'active' : ''].join(' ');
   $('#fCats').innerHTML = CATEGORIES.map(c => `
-    <button class="cat-opt ${state.cat === c.id ? 'active' : ''}" data-action="cat" data-cat="${c.id}">
-      ${catIco(c)}<span>${c.name}</span>
+    <button class="cat-opt ${cls(c)}" data-action="cat" data-cat="${c.id}">
+      ${catIco(c)}<span>${esc(c.name)}</span>
     </button>`).join('') + `
-    <button class="cat-opt ${extraSel || state.moreOpen ? 'active' : ''}" data-action="more">
+    <button class="cat-opt ${!sw && (extraSel || state.moreOpen) ? 'active' : ''} ${sw ? 'dim' : ''}" data-action="more">
       ${catIco(other)}<span>${esc(other.name)}</span>
     </button>`;
-  $('#fMore').hidden = !state.moreOpen;
+  $('#fSwapHint').hidden = !sw;
+  if (sw) $('#fSwapText').textContent = `Нажми категорию, которую поставить на место «${CAT[sw].name}»`;
+  $('#fMore').hidden = !(state.moreOpen || sw);
   $('#fExtra').innerHTML = EXTRA.map(c =>
-    `<button class="chip ${state.cat === c.id ? 'active' : ''}" data-action="cat" data-cat="${c.id}"><i style="background:${c.color}"></i>${esc(c.name)}</button>`
-  ).join('') + `<button class="chip dashed" data-action="new-cat">${icon('plus', 14)}Своя</button>`;
+    `<button class="chip ${cls(c)}" data-action="cat" data-cat="${c.id}"><i style="background:${c.color}"></i>${esc(c.name)}</button>`
+  ).join('') + (sw ? '' : `<button class="chip dashed" data-action="new-cat">${icon('plus', 14)}Своя</button>`);
 }
+// поменять местами две категории (в сетке, в «Другое» или между ними)
+function swapCats(a, b) {
+  const where = id => {
+    let i = CATEGORIES.findIndex(c => c.id === id);
+    if (i >= 0) return [CATEGORIES, i];
+    i = EXTRA.findIndex(c => c.id === id);
+    return [EXTRA, i];
+  };
+  const [la, ia] = where(a), [lb, ib] = where(b);
+  if (ia < 0 || ib < 0) return;
+  [la[ia], lb[ib]] = [lb[ib], la[ia]];
+  rebuildCat();
+  saveCatOrder();
+}
+function stopSwap() {
+  state.swapFrom = null;
+  renderCatGrid();
+}
+
+// зажатие категории — режим перестановки
+let pressTimer = null, pressStart = null, suppressClick = false;
+function onPressStart(e) {
+  const el = e.target.closest('#fCats [data-cat], #fExtra [data-cat]');
+  if (!el || state.swapFrom) return;
+  pressStart = { x: e.clientX, y: e.clientY };
+  clearTimeout(pressTimer);
+  pressTimer = setTimeout(() => {
+    pressTimer = null;
+    suppressClick = true;
+    state.swapFrom = el.dataset.cat;
+    haptic.ok();
+    if (navigator.vibrate) navigator.vibrate(15);
+    renderCatGrid();
+  }, 450);
+}
+function onPressCancel(e) {
+  if (!pressTimer) return;
+  if (e.type === 'pointermove' && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) < 8) return;
+  clearTimeout(pressTimer);
+  pressTimer = null;
+}
+sheet.addEventListener('pointerdown', onPressStart);
+// клик после отпускания долгого нажатия гасим, но только этот один — дальше тапы работают как обычно
+sheet.addEventListener('pointerup', () => { if (suppressClick) setTimeout(() => { suppressClick = false; }, 80); });
+['pointerup', 'pointercancel', 'pointermove', 'pointerleave'].forEach(t => sheet.addEventListener(t, onPressCancel));
+sheet.addEventListener('contextmenu', e => { if (e.target.closest('[data-cat]')) e.preventDefault(); });
 function renderIncGrid() {
   $('#fIncCats').innerHTML = INCOME_CATS.map(c => `
     <button class="cat-opt ${state.incCat === c.id ? 'active' : ''}" data-action="inc-cat" data-cat="${c.id}">
@@ -975,7 +1040,7 @@ function sizeAmount() {
 function openSheet(mode, opts = {}) {
   fAmount.value = ''; fName.value = ''; fNote.value = ''; fDate.value = isoDate(today);
   $('#fCatName').value = ''; $('#fAddCat').hidden = true;
-  Object.assign(state, { moreOpen: false, editAcc: null, editOp: null, optRepeat: false });
+  Object.assign(state, { moreOpen: false, editAcc: null, editOp: null, optRepeat: false, swapFrom: null });
 
   if (mode === 'debt') { state.debtDir = state.tab === 'debts' ? state.debtView : 'in'; state.debtAcc = null; }
   if (opts.op) {
@@ -1012,6 +1077,7 @@ function openSheet(mode, opts = {}) {
   if (!opts.op && mode !== 'acc-edit' && mode !== 'goal') setTimeout(() => fAmount.focus(), 320);
 }
 function closeSheet() {
+  state.swapFrom = null;
   sheet.classList.remove('open'); backdrop.classList.remove('open');
   document.activeElement?.blur();
   tg?.BackButton?.hide();
@@ -1096,9 +1162,11 @@ function createCategory() {
   } else {
     const customCount = EXTRA.filter(c => c.custom).length;
     const c = { id: 'c_' + uid(), name, color: CUSTOM_COLORS[customCount % CUSTOM_COLORS.length], icon: 'tag', custom: true };
-    EXTRA.splice(EXTRA.length - 1, 0, c);
+    const oi = EXTRA.findIndex(x => x.id === 'other');
+    EXTRA.splice(oi >= 0 ? oi : EXTRA.length, 0, c);
     rebuildCat();
     saveCats();
+    saveCatOrder();
     state.cat = c.id;
   }
   input.value = '';
@@ -1209,10 +1277,21 @@ function toast(text, actionLabel, action) {
 /* ---------- Клики ---------- */
 const KIND_MODE = { exp: 'expense', inc: 'income', tr: 'transfer' };
 document.addEventListener('click', e => {
+  if (suppressClick) { suppressClick = false; e.preventDefault(); return; }   // клик после долгого нажатия
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const a = el.dataset.action;
   const id = el.dataset.id;
+  // режим перестановки категорий
+  if (state.swapFrom && state.mode === 'expense' && sheet.contains(el)) {
+    if (a === 'cat') {
+      const to = el.dataset.cat;
+      if (to !== state.swapFrom) { swapCats(state.swapFrom, to); haptic.ok(); }
+      stopSwap();
+      return;
+    }
+    if (a === 'swap-done' || a === 'more') { stopSwap(); return; }
+  }
   switch (a) {
     case 'tab': setTab(el.dataset.tab); break;
     case 'month': shiftMonth(+el.dataset.dir); break;
@@ -1225,6 +1304,7 @@ document.addEventListener('click', e => {
     case 'close': closeSheet(); break;
     case 'save': save(); break;
     case 'seg': setMode(el.dataset.mode); haptic.select(); break;
+    case 'swap-done': stopSwap(); break;
     case 'cat': state.cat = el.dataset.cat; state.moreOpen = false; $('#fAddCat').hidden = true; renderCatGrid(); haptic.select(); break;
     case 'more': state.moreOpen = !state.moreOpen; if (!state.moreOpen) $('#fAddCat').hidden = true; renderCatGrid(); haptic.select(); break;
     case 'new-cat': $('#fAddCat').hidden = false; $('#fCatName').focus(); haptic.tap(); break;
