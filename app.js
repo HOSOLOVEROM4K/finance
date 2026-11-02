@@ -128,11 +128,28 @@ const ACC_TYPE = Object.fromEntries(ACC_TYPES.map(t => [t.id, t]));
 const ACC_COLORS = ['#c9b98f', '#8fb996', '#8aa6c1', '#9a8fc9', '#b48fa8', '#7fb5b0', '#d98c74'];
 
 const expenses = {};          // { e2026_11: [ {id, ts, amount, cat, acc, note, date} ] }
-const debts = [];
+const incomes = {};           // { i2026_11: [ … то же самое … ] }
+const debts = [];             // dir: 'in' — мне должны, 'out' — я должен
 const accounts = [];
 const ACC = id => accounts.find(a => a.id === id);
 
 const mkey = (y, m) => `e${y}_${pad(m + 1)}`;
+const ikey = (y, m) => `i${y}_${pad(m + 1)}`;
+function getIncomes(y, m) {
+  const k = ikey(y, m);
+  return incomes[k] || (incomes[k] = []);
+}
+
+// категории доходов
+const INCOME_CATS = [
+  { id: 'salary',  name: 'Зарплата',   color: '#8fb996', icon: 'wallet' },
+  { id: 'stipend', name: 'Стипендия',  color: '#7fb5b0', icon: 'book' },
+  { id: 'side',    name: 'Подработка', color: '#9fb88a', icon: 'tech' },
+  { id: 'gift_in', name: 'Подарок',    color: '#c9b98f', icon: 'gift' },
+  { id: 'refund',  name: 'Возврат',    color: '#8aa6c1', icon: 'repeat' },
+  { id: 'in_other',name: 'Другое',     color: '#7a8088', icon: 'dots' },
+];
+const ICAT = Object.fromEntries(INCOME_CATS.map(c => [c.id, c]));
 function getExpenses(y, m) {
   const k = mkey(y, m);
   return expenses[k] || (expenses[k] = []);
@@ -228,11 +245,15 @@ function persist(key, value) {
 
 // компактные форматы — чтобы влезало больше
 const saveAccounts = () => persist('accounts', JSON.stringify(accounts.map(a => [a.id, a.name, a.type, a.color, a.balance])));
-const saveDebts = () => persist('debts', JSON.stringify(debts.map(d => [d.id, d.name, d.amount, d.note, isoDate(d.date), d.closed ? 1 : 0, d.ts || 0])));
+const saveDebts = () => persist('debts', JSON.stringify(debts.map(d => [d.id, d.name, d.amount, d.note, isoDate(d.date), d.closed ? 1 : 0, d.ts || 0, d.dir || 'in'])));
 const saveCats = () => persist('cats', JSON.stringify(EXTRA.filter(c => c.custom).map(c => [c.id, c.name, c.color])));
 function saveMonth(y, m) {
   const k = mkey(y, m);
   return persist(k, JSON.stringify((expenses[k] || []).map(e => [e.id, e.date.getDate(), e.amount, e.cat, e.acc || '', e.note, e.ts || 0])));
+}
+function saveIncMonth(y, m) {
+  const k = ikey(y, m);
+  return persist(k, JSON.stringify((incomes[k] || []).map(e => [e.id, e.date.getDate(), e.amount, e.cat, e.acc || '', e.note, e.ts || 0])));
 }
 
 async function load() {
@@ -276,11 +297,16 @@ async function load() {
   read('cats').forEach(([id, name, color]) => EXTRA.splice(EXTRA.length - 1, 0, { id, name, color, icon: 'tag', custom: true }));
   rebuildCat();
   read('accounts').forEach(([id, name, type, color, balance]) => accounts.push({ id, name, type, color, balance }));
-  read('debts').forEach(([id, name, amount, note, date, closed, ts]) => debts.push({ id, name, amount, note, date: ymd(date), closed: !!closed, ts }));
+  read('debts').forEach(([id, name, amount, note, date, closed, ts, dir]) => debts.push({ id, name, amount, note, date: ymd(date), closed: !!closed, ts, dir: dir || 'in' }));
   Object.keys(chunkIndex).filter(k => /^e\d{4}_\d{2}$/.test(k)).forEach(k => {
     const y = +k.slice(1, 5), m = +k.slice(6) - 1;
     expenses[k] = read(k).map(([id, d, amount, cat, acc, note, ts]) =>
       ({ id, date: new Date(y, m, d), amount, cat: CAT[cat] ? cat : 'other', acc: acc || null, note, ts }));
+  });
+  Object.keys(chunkIndex).filter(k => /^i\d{4}_\d{2}$/.test(k)).forEach(k => {
+    const y = +k.slice(1, 5), m = +k.slice(6) - 1;
+    incomes[k] = read(k).map(([id, d, amount, cat, acc, note, ts]) =>
+      ({ id, income: true, date: new Date(y, m, d), amount, cat: ICAT[cat] ? cat : 'in_other', acc: acc || null, note, ts }));
   });
 }
 
@@ -292,18 +318,26 @@ function addExpense({ amount, cat, accId, note, date }) {
   saveMonth(y, m);
   if (acc) { acc.balance -= amount; saveAccounts(); }
 }
-function deleteExpense(id) {
-  for (const [k, list] of Object.entries(expenses)) {
-    const i = list.findIndex(e => e.id === id);
-    if (i < 0) continue;
-    const [e] = list.splice(i, 1);
-    const acc = ACC(e.acc);
-    if (acc) { acc.balance += e.amount; saveAccounts(); }
-    saveMonth(e.date.getFullYear(), e.date.getMonth());
-    renderAll();
-    haptic.tap();
-    return;
-  }
+function addIncome({ amount, cat, accId, note, date }) {
+  const acc = ACC(accId);
+  const y = date.getFullYear(), m = date.getMonth();
+  getIncomes(y, m).push({ id: uid(), income: true, ts: Date.now(), amount, cat, acc: acc?.id || null, note: note || ICAT[cat].name, date });
+  saveIncMonth(y, m);
+  if (acc) { acc.balance += amount; saveAccounts(); }
+}
+const findOp = id => [...Object.values(expenses), ...Object.values(incomes)].flat().find(x => x.id === id);
+// удалить трату или доход и вернуть деньги на счёт
+function deleteOp(id) {
+  const e = findOp(id);
+  if (!e) return;
+  const y = e.date.getFullYear(), m = e.date.getMonth();
+  const list = e.income ? getIncomes(y, m) : getExpenses(y, m);
+  list.splice(list.indexOf(e), 1);
+  const acc = ACC(e.acc);
+  if (acc) { acc.balance += e.income ? -e.amount : e.amount; saveAccounts(); }
+  e.income ? saveIncMonth(y, m) : saveMonth(y, m);
+  renderAll();
+  haptic.tap();
 }
 function confirmBox(text, onYes) {
   if (tg?.showConfirm && tg.isVersionAtLeast?.('6.2')) tg.showConfirm(text, ok => ok && onYes());
@@ -321,6 +355,10 @@ const state = {
   acc: null,
   accType: 'card',
   accEdit: false,
+  incCat: 'salary',
+  debtDir: 'in',      // в шторке
+  debtView: 'in',     // на вкладке «Долги»
+  editAcc: null,      // id счёта, который редактируем
 };
 const isCurrentMonth = () => state.month.getFullYear() === today.getFullYear() && state.month.getMonth() === today.getMonth();
 
@@ -329,14 +367,14 @@ function catIco(c) {
   return `<div class="cat-ico" style="color:${c.color};background:${c.color}1f">${icon(c.icon, 18)}</div>`;
 }
 function txHTML(e, withDate) {
-  const c = CAT[e.cat] || CAT.other;
+  const c = e.income ? ICAT[e.cat] : (CAT[e.cat] || CAT.other);
   return `<div class="tx tappable" data-action="tx" data-id="${e.id}">
     ${catIco(c)}
     <div class="tx-main">
       <div class="tx-title">${esc(e.note)}</div>
       <div class="tx-sub">${esc(c.name)}${withDate ? ' · ' + shortDate(e.date) : ''}</div>
     </div>
-    <div class="tx-amt num">−${fmt(e.amount)}</div>
+    <div class="tx-amt num ${e.income ? 'pos' : ''}">${e.income ? '+' : '−'}${fmt(e.amount)}</div>
   </div>`;
 }
 const sortDesc = list => [...list].sort((a, b) => (b.date - a.date) || ((b.ts ?? 0) - (a.ts ?? 0)));
@@ -346,6 +384,7 @@ function byCategory(list) {
   return Object.entries(m).sort((a, b) => b[1] - a[1]);
 }
 const monthList = () => getExpenses(state.month.getFullYear(), state.month.getMonth());
+const monthIncome = () => getIncomes(state.month.getFullYear(), state.month.getMonth());
 
 /* ---------- Обзор ---------- */
 function renderOverview() {
@@ -364,6 +403,12 @@ function renderOverview() {
     $('#ovDelta').textContent = total ? 'Нет данных за прошлый месяц' : 'Трат пока нет';
   }
 
+  const inc = sum(monthIncome());
+  const net = inc - total;
+  $('#ovFlow').innerHTML = `
+    <div><span>Доходы</span><b class="num pos">+${fmt(inc)}</b></div>
+    <div><span>Итог месяца</span><b class="num ${net >= 0 ? 'pos' : 'neg'}">${net >= 0 ? '+' : '−'}${fmt(Math.abs(net))}</b></div>`;
+
   // категории: полоска + топ-4 + «остальное»
   const cats = byCategory(list);
   $('#ovStack').hidden = !cats.length;
@@ -380,46 +425,63 @@ function renderOverview() {
     </li>`).join('') : `<div class="empty">Нажми + и добавь первую трату</div>`;
 
   // мини-карточки
-  const open = debts.filter(d => !d.closed);
-  $('#ovDebts').textContent = fmt(sum(open));
-  $('#ovDebtsSub').textContent = open.length ? `${open.length} ${plural(open.length, ['долг', 'долга', 'долгов'])}` : 'Никто не должен';
+  const owedMe = sum(debts.filter(d => !d.closed && d.dir !== 'out'));
+  const iOwe = sum(debts.filter(d => !d.closed && d.dir === 'out'));
+  $('#ovDebts').textContent = fmt(owedMe);
+  $('#ovDebtsSub').innerHTML = iOwe ? `Я должен <span class="neg">${fmt(iOwe)}</span>` : 'Я никому не должен';
   $('#ovMoney').textContent = fmt(sum(accounts, a => a.balance));
   $('#ovMoneySub').textContent = `${accounts.length} ${plural(accounts.length, ['счёт', 'счёта', 'счетов'])}`;
 
-  const recent = sortDesc(list).slice(0, 4);
+  const recent = sortDesc([...list, ...monthIncome()]).slice(0, 4);
   $('#ovRecent').innerHTML = recent.length ? recent.map(e => txHTML(e, true)).join('') : `<div class="empty">Пусто</div>`;
 }
 
 /* ---------- Траты ---------- */
 function renderExpenses() {
   const all = monthList();
+  const incList = monthIncome();
   const cats = byCategory(all);
-  const total = sum(all);
-  if (state.filter !== 'all' && !cats.some(([id]) => id === state.filter)) state.filter = 'all';
+  if (state.filter === 'income' && !incList.length) state.filter = 'all';
+  if (!['all', 'income'].includes(state.filter) && !cats.some(([id]) => id === state.filter)) state.filter = 'all';
   const f = state.filter;
+  const isInc = f === 'income';
 
-  // круговая диаграмма
-  const R = 40, C = 2 * Math.PI * R, gap = cats.length > 1 ? 1.6 : 0;
+  // круговая диаграмма: траты по категориям, а на фильтре «Доходы» — доходы
+  const dCats = isInc ? byCategory(incList) : cats;
+  const dMap = isInc ? ICAT : CAT;
+  const dTotal = isInc ? sum(incList) : sum(all);
+  const R = 40, C = 2 * Math.PI * R, gap = dCats.length > 1 ? 1.6 : 0;
   let acc = 0;
-  const segs = cats.map(([id, v]) => {
-    const len = v / total * C;
-    const s = `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${CAT[id].color}" stroke-width="${f === id ? 11 : 9}"
-      opacity="${f === 'all' || f === id ? 1 : .18}"
-      stroke-dasharray="${Math.max(len - gap, .01)} ${C}" stroke-dashoffset="${-acc}"/>`;
+  const segs = dCats.map(([id, v]) => {
+    const len = v / dTotal * C;
+    const on = f === 'all' || isInc || f === id;
+    const s = `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${dMap[id].color}" stroke-width="${f === id ? 11 : 9}"
+      opacity="${on ? 1 : .18}" stroke-dasharray="${Math.max(len - gap, .01)} ${C}" stroke-dashoffset="${-acc}"/>`;
     acc += len;
     return s;
   }).join('');
   $('#exDonut').innerHTML = `<circle cx="50" cy="50" r="${R}" fill="none" stroke="#23272c" stroke-width="9"/>` + segs;
 
-  const list = sortDesc(f === 'all' ? all : all.filter(e => e.cat === f));
-  const shown = sum(list);
-  $('#exTotal').textContent = fmt(shown);
-  $('#exCount').textContent = f === 'all'
-    ? `${list.length} ${plural(list.length, ['операция', 'операции', 'операций'])}`
-    : `${CAT[f].name} · ${pctText(shown / total * 100)}`;
+  let list;
+  if (f === 'all') list = sortDesc([...all, ...incList]);
+  else if (isInc) list = sortDesc(incList);
+  else list = sortDesc(all.filter(e => e.cat === f));
+
+  if (f === 'all') {
+    $('#exTotal').textContent = fmt(sum(all));
+    $('#exCount').textContent = `потрачено · ${all.length} ${plural(all.length, ['операция', 'операции', 'операций'])}`;
+  } else if (isInc) {
+    $('#exTotal').innerHTML = `<span class="pos">+${fmt(dTotal)}</span>`;
+    $('#exCount').textContent = `доходы · ${incList.length} ${plural(incList.length, ['операция', 'операции', 'операций'])}`;
+  } else {
+    const shown = sum(list);
+    $('#exTotal').textContent = fmt(shown);
+    $('#exCount').textContent = `${CAT[f].name} · ${pctText(shown / sum(all) * 100)}`;
+  }
 
   $('#exChips').innerHTML =
     `<button class="chip ${f === 'all' ? 'active' : ''}" data-action="filter" data-cat="all">Все</button>` +
+    (incList.length ? `<button class="chip ${isInc ? 'active' : ''}" data-action="filter" data-cat="income"><i style="background:var(--pos)"></i>Доходы</button>` : '') +
     cats.map(([id]) => `<button class="chip ${f === id ? 'active' : ''}" data-action="filter" data-cat="${id}"><i style="background:${CAT[id].color}"></i>${esc(CAT[id].name)}</button>`).join('');
 
   const groups = [];
@@ -429,17 +491,22 @@ function renderExpenses() {
     if (!g || g.k !== k) groups.push(g = { k, date: e.date, items: [] });
     g.items.push(e);
   });
+  const dayTotals = items => {
+    const out = sum(items.filter(e => !e.income)), inn = sum(items.filter(e => e.income));
+    return [inn ? `<span class="pos">+${fmt(inn)}</span>` : '', out ? `−${fmt(out)}` : ''].filter(Boolean).join('&nbsp;&nbsp;');
+  };
   $('#exList').innerHTML = groups.length ? groups.map(g => `
     <div class="group">
-      <div class="group-head"><span>${dayLabel(g.date)}</span><span class="num">−${fmt(sum(g.items))}</span></div>
+      <div class="group-head"><span>${dayLabel(g.date)}</span><span class="num">${dayTotals(g.items)}</span></div>
       <div class="card list-card">${g.items.map(e => txHTML(e, false)).join('')}</div>
-    </div>`).join('') : `<div class="empty">В этом месяце трат нет</div>`;
+    </div>`).join('') : `<div class="empty">В этом месяце операций нет</div>`;
 }
 
 /* ---------- Долги ---------- */
 function debtHTML(d) {
+  const out = d.dir === 'out';
   return `<div class="tx ${d.closed ? 'settled' : ''}">
-    <div class="avatar">${esc(d.name.trim()[0] || '?').toUpperCase()}</div>
+    <div class="avatar ${out ? 'out' : ''}">${esc(d.name.trim()[0] || '?').toUpperCase()}</div>
     <div class="tx-main">
       <div class="tx-title">${esc(d.name)}</div>
       <div class="tx-sub">${d.note ? esc(d.note) + ' · ' : ''}${shortDate(d.date)}</div>
@@ -448,18 +515,32 @@ function debtHTML(d) {
       <div class="tx-amt num">${fmt(d.amount)}</div>
       ${d.closed
         ? `<button class="settle ghost" data-action="settle" data-id="${d.id}">вернуть в список</button>`
-        : `<button class="settle" data-action="settle" data-id="${d.id}">${icon('check', 13)}Вернул</button>`}
+        : `<button class="settle" data-action="settle" data-id="${d.id}">${icon('check', 13)}${out ? 'Отдал' : 'Вернул'}</button>`}
     </div>
   </div>`;
 }
 function renderDebts() {
-  const open = sortDesc(debts.filter(d => !d.closed));
-  const closed = sortDesc(debts.filter(d => d.closed));
+  const view = state.debtView;
+  const mine = debts.filter(d => (d.dir || 'in') === view);
+  const open = sortDesc(mine.filter(d => !d.closed));
+  const closed = sortDesc(mine.filter(d => d.closed));
+  const owedMe = sum(debts.filter(d => !d.closed && d.dir !== 'out'));
+  const iOwe = sum(debts.filter(d => !d.closed && d.dir === 'out'));
+
+  $$('#dbSeg button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  $('#dbSegIn').textContent = owedMe ? fmt(owedMe) : '';
+  $('#dbSegOut').textContent = iOwe ? fmt(iOwe) : '';
+  $('#dbEyebrow').textContent = view === 'in' ? 'Мне должны' : 'Я должен';
   $('#dbTotal').textContent = fmt(sum(open));
+  $('#dbTotal').classList.toggle('neg', view === 'out' && open.length > 0);
   $('#dbSub').textContent = open.length
-    ? `у ${open.length} ${plural(open.length, ['человека', 'человек', 'человек'])}`
-    : 'Все долги закрыты';
-  $('#dbActive').innerHTML = open.length ? open.map(debtHTML).join('') : `<div class="empty">Никто ничего не должен</div>`;
+    ? (view === 'in'
+        ? `у ${open.length} ${plural(open.length, ['человека', 'человек', 'человек'])}`
+        : `${open.length} ${plural(open.length, ['человеку', 'людям', 'людям'])}`)
+    : (view === 'in' ? 'Все долги закрыты' : 'Ты никому не должен');
+  $('#dbActive').innerHTML = open.length ? open.map(debtHTML).join('')
+    : `<div class="empty">${view === 'in' ? 'Никто ничего не должен' : 'Долгов нет'}</div>`;
+  $('#dbClosedLabel').textContent = view === 'in' ? 'Вернули' : 'Отдал';
   $('#dbClosedWrap').hidden = !closed.length;
   $('#dbClosed').innerHTML = closed.map(debtHTML).join('');
 }
@@ -484,7 +565,7 @@ function renderAccounts() {
   $('#acList').innerHTML = accounts.length ? accounts.map(a => {
     const t = ACC_TYPE[a.type];
     const share = total > 0 && a.balance > 0 ? Math.round(a.balance / total * 100) : 0;
-    return `<div class="tx">
+    return `<div class="tx ${state.accEdit ? '' : 'tappable'}" ${state.accEdit ? '' : `data-action="open-acc" data-id="${a.id}"`}>
       <div class="cat-ico" style="color:${a.color};background:${a.color}1f">${icon(t.icon, 18)}</div>
       <div class="tx-main">
         <div class="tx-title">${esc(a.name)}</div>
@@ -564,6 +645,16 @@ function renderCatGrid() {
     `<button class="chip ${state.cat === c.id ? 'active' : ''}" data-action="cat" data-cat="${c.id}"><i style="background:${c.color}"></i>${esc(c.name)}</button>`
   ).join('') + `<button class="chip dashed" data-action="new-cat">${icon('plus', 14)}Своя</button>`;
 }
+function renderIncGrid() {
+  $('#fIncCats').innerHTML = INCOME_CATS.map(c => `
+    <button class="cat-opt ${state.incCat === c.id ? 'active' : ''}" data-action="inc-cat" data-cat="${c.id}">
+      ${catIco(c)}<span>${c.name}</span>
+    </button>`).join('');
+}
+function renderDebtDir() {
+  $$('#fDebtDir button').forEach(b => b.classList.toggle('active', b.dataset.dir === state.debtDir));
+  fName.placeholder = state.debtDir === 'out' ? 'Кому должен' : 'Кто должен';
+}
 function renderAccPicker() {
   if (!ACC(state.acc)) state.acc = accounts[0]?.id;
   $('#fAccs').innerHTML = accounts.length
@@ -578,28 +669,46 @@ function renderTypeGrid() {
 }
 function setMode(mode) {
   state.mode = mode;
-  $$('.segment button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  $$('#fSeg button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   $$('[data-for]').forEach(el => el.hidden = !el.dataset.for.split(' ').includes(mode));
+  const isAcc = mode === 'account' || mode === 'acc-edit';
   fNote.placeholder = mode === 'debt' ? 'За что' : 'Комментарий';
-  fName.placeholder = mode === 'account' ? 'Название счёта' : 'Кто должен';
-  $('#fNameIcon').innerHTML = icon(mode === 'account' ? 'wallet' : 'user', 20);
-  $('#fSave').textContent = { expense: 'Добавить трату', debt: 'Записать долг', account: 'Добавить счёт' }[mode];
-  if (mode === 'expense') { renderCatGrid(); renderAccPicker(); }
-  if (mode === 'account') renderTypeGrid();
+  fName.placeholder = isAcc ? 'Название счёта' : 'Кто должен';
+  $('#fNameIcon').innerHTML = icon(isAcc ? 'wallet' : 'user', 20);
+  $('#fAccLabel').textContent = mode === 'income' ? 'Зачислить на счёт' : 'Списать со счёта';
+  $('#fSave').textContent = {
+    expense: 'Добавить трату', income: 'Добавить доход', debt: 'Записать долг',
+    account: 'Добавить счёт', 'acc-edit': 'Сохранить',
+  }[mode];
+  if (mode === 'expense') renderCatGrid();
+  if (mode === 'income') renderIncGrid();
+  if (mode === 'expense' || mode === 'income') renderAccPicker();
+  if (mode === 'debt') renderDebtDir();
+  if (isAcc) renderTypeGrid();
 }
 function sizeAmount() {
   fAmount.style.width = Math.max(1, fAmount.value.length) + 'ch';
 }
-function openSheet(mode) {
+function openSheet(mode, accId) {
   fAmount.value = ''; fName.value = ''; fNote.value = ''; fDate.value = isoDate(today);
   $('#fCatName').value = ''; $('#fAddCat').hidden = true;
   state.moreOpen = false;
+  state.editAcc = null;
+  if (mode === 'debt') state.debtDir = state.tab === 'debts' ? state.debtView : 'in';
+  if (mode === 'acc-edit') {
+    const a = ACC(accId);
+    if (!a) return;
+    state.editAcc = a.id;
+    state.accType = a.type;
+    fAmount.value = Math.abs(a.balance) ? Math.abs(a.balance).toLocaleString('ru-RU') : '';
+    fName.value = a.name;
+  }
   sizeAmount();
   setMode(mode);
   sheet.classList.add('open'); backdrop.classList.add('open');
   tg?.BackButton?.show();
   haptic.tap();
-  setTimeout(() => fAmount.focus(), 320);
+  if (mode !== 'acc-edit') setTimeout(() => fAmount.focus(), 320);
 }
 function closeSheet() {
   sheet.classList.remove('open'); backdrop.classList.remove('open');
@@ -643,7 +752,7 @@ function shake(el) {
 }
 function save() {
   const amount = Number(fAmount.value.replace(/\D/g, ''));
-  if (!amount && state.mode !== 'account') return shake($('#fAmountWrap'));
+  if (!amount && state.mode !== 'account' && state.mode !== 'acc-edit') return shake($('#fAmountWrap'));
   const [y, m, d] = (fDate.value || isoDate(today)).split('-').map(Number);
   const date = new Date(y, m - 1, d);
   const note = fNote.value.trim();
@@ -651,11 +760,20 @@ function save() {
   if (state.mode === 'expense') {
     addExpense({ amount, cat: state.cat, accId: state.acc, note, date });
     if (date <= today) state.month = new Date(y, m - 1, 1);
+  } else if (state.mode === 'income') {
+    addIncome({ amount, cat: state.incCat, accId: state.acc, note, date });
+    if (date <= today) state.month = new Date(y, m - 1, 1);
   } else if (state.mode === 'debt') {
     const name = fName.value.trim();
     if (!name) return shake($('#fNameWrap'));
-    debts.push({ id: uid(), ts: Date.now(), name, amount, note, date, closed: false });
+    debts.push({ id: uid(), ts: Date.now(), name, amount, note, date, closed: false, dir: state.debtDir });
+    state.debtView = state.debtDir;
     saveDebts();
+  } else if (state.mode === 'acc-edit') {
+    const a = ACC(state.editAcc);
+    const name = fName.value.trim();
+    if (!name) return shake($('#fNameWrap'));
+    if (a) { a.name = name; a.type = state.accType; a.balance = amount; saveAccounts(); }
   } else {
     const name = fName.value.trim();
     if (!name) return shake($('#fNameWrap'));
@@ -690,6 +808,11 @@ document.addEventListener('click', e => {
   if (a === 'tab') setTab(el.dataset.tab);
   else if (a === 'month') shiftMonth(+el.dataset.dir);
   else if (a === 'add') openSheet(state.tab === 'debts' ? 'debt' : state.tab === 'accounts' ? 'account' : 'expense');
+  else if (a === 'open-acc') openSheet('acc-edit', el.dataset.id);
+  else if (a === 'del-acc-sheet') { const id = state.editAcc; closeSheet(); deleteAccount(id); }
+  else if (a === 'inc-cat') { state.incCat = el.dataset.cat; renderIncGrid(); haptic.select(); }
+  else if (a === 'debt-dir') { state.debtDir = el.dataset.dir; renderDebtDir(); haptic.select(); }
+  else if (a === 'debt-view') { state.debtView = el.dataset.view; renderDebts(); haptic.select(); }
   else if (a === 'add-account') openSheet('account');
   else if (a === 'backup') exportBackup();
   else if (a === 'restore') $('#bkFile').click();
@@ -706,8 +829,8 @@ document.addEventListener('click', e => {
   else if (a === 'acc-edit') { state.accEdit = !state.accEdit; renderAccounts(); haptic.select(); }
   else if (a === 'del-acc') deleteAccount(el.dataset.id);
   else if (a === 'tx') {
-    const e = Object.values(expenses).flat().find(x => x.id === el.dataset.id);
-    if (e) confirmBox(`Удалить трату «${e.note}» на ${fmtNum(e.amount)} ₽?`, () => deleteExpense(e.id));
+    const e = findOp(el.dataset.id);
+    if (e) confirmBox(`Удалить ${e.income ? 'доход' : 'трату'} «${e.note}» на ${fmtNum(e.amount)} ₽?`, () => deleteOp(e.id));
   }
   else if (a === 'toast-act') { toastAction?.(); toastAction = null; $('#toast').classList.remove('show'); haptic.ok(); }
   else if (a === 'settle') {

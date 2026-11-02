@@ -317,3 +317,24 @@ body.loading .app, body.loading .tabbar { opacity: 0; }
 .backup-text .warn { color: var(--neg); }
 .backup-btns { display: flex; gap: 6px; }
 .settle.primary { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 600; }
+
+/* ---------- Доходы / долги / редактирование счёта ---------- */
+.flow { display: flex; gap: 28px; margin-top: 16px; }
+.flow div { display: flex; flex-direction: column; gap: 3px; }
+.flow span { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 500; }
+.flow b { font-size: 16px; font-weight: 600; }
+
+.segment.four { grid-template-columns: repeat(4, 1fr); }
+.segment.two { grid-template-columns: 1fr 1fr; }
+#fDebtDir { margin: 0 0 4px; }
+.debt-seg { margin: 8px 0 0; }
+.debt-seg button { height: 36px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.debt-seg small { font-size: 11px; color: var(--muted); }
+.debt-seg button.active small { color: var(--text); opacity: .7; }
+.avatar.out { background: #d98c7426; color: var(--neg); }
+#dbTotal.neg { color: var(--neg); }
+
+.cat-grid.three { grid-template-columns: repeat(3, 1fr); }
+.sheet-title { text-align: center; font-weight: 600; font-size: 16px; padding: 2px 0 4px; }
+.btn-danger { width: 100%; height: 44px; margin-top: 8px; color: var(--neg); font-size: 15px; border-radius: 12px; }
+.btn-danger:active { background: #d98c741a; }

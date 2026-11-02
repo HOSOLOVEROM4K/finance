@@ -36,6 +36,7 @@
       <div class="eyebrow">Потрачено за месяц</div>
       <div class="hero-amount num" id="ovTotal"></div>
       <div class="hero-sub" id="ovDelta"></div>
+      <div class="flow" id="ovFlow"></div>
     </div>
 
     <div class="card">
@@ -85,14 +86,18 @@
   <!-- ДОЛГИ -->
   <section class="screen" id="screen-debts">
     <header class="topbar"><div class="title">Долги</div></header>
+    <div class="segment two debt-seg" id="dbSeg">
+      <button data-action="debt-view" data-view="in">Мне должны <small class="num" id="dbSegIn"></small></button>
+      <button data-action="debt-view" data-view="out">Я должен <small class="num" id="dbSegOut"></small></button>
+    </div>
     <div class="hero">
-      <div class="eyebrow">Мне должны</div>
+      <div class="eyebrow" id="dbEyebrow">Мне должны</div>
       <div class="hero-amount num" id="dbTotal"></div>
       <div class="hero-sub" id="dbSub"></div>
     </div>
     <div class="card list-card" id="dbActive"></div>
     <div id="dbClosedWrap">
-      <div class="section-label">Вернули</div>
+      <div class="section-label" id="dbClosedLabel">Вернули</div>
       <div class="card list-card" id="dbClosed"></div>
     </div>
   </section>
@@ -143,10 +148,16 @@
 <div class="backdrop" data-action="close"></div>
 <div class="sheet" id="sheet">
   <div class="grabber"></div>
-  <div class="segment">
+  <div class="segment four" id="fSeg" data-for="expense income debt account">
     <button data-action="seg" data-mode="expense">Трата</button>
+    <button data-action="seg" data-mode="income">Доход</button>
     <button data-action="seg" data-mode="debt">Долг</button>
     <button data-action="seg" data-mode="account">Счёт</button>
+  </div>
+  <div class="sheet-title" data-for="acc-edit">Изменить счёт</div>
+  <div class="segment two" id="fDebtDir" data-for="debt">
+    <button data-action="debt-dir" data-dir="in">Мне должны</button>
+    <button data-action="debt-dir" data-dir="out">Я должен</button>
   </div>
 
   <label class="amount-field" id="fAmountWrap">
@@ -163,23 +174,29 @@
         <button data-action="create-cat">Добавить</button>
       </div>
     </div>
-    <div class="field-label">Списать со счёта</div>
+  </div>
+
+  <div class="cat-grid three" id="fIncCats" data-for="income"></div>
+
+  <div data-for="expense income">
+    <div class="field-label" id="fAccLabel">Списать со счёта</div>
     <div class="chips sheet-chips" id="fAccs"></div>
   </div>
 
-  <div class="type-grid" id="fTypes" data-for="account"></div>
+  <div class="type-grid" id="fTypes" data-for="account acc-edit"></div>
 
-  <label class="field" data-for="debt account" id="fNameWrap">
+  <label class="field" data-for="debt account acc-edit" id="fNameWrap">
     <span id="fNameIcon"></span><input id="fName" placeholder="Кто должен" autocomplete="off">
   </label>
-  <label class="field" data-for="expense debt">
+  <label class="field" data-for="expense income debt">
     <span data-icon="note"></span><input id="fNote" placeholder="Комментарий" autocomplete="off">
   </label>
-  <label class="field" data-for="expense debt">
+  <label class="field" data-for="expense income debt">
     <span data-icon="calendar"></span><input id="fDate" type="date">
   </label>
 
   <button class="btn" data-action="save" id="fSave">Сохранить</button>
+  <button class="btn-danger" data-action="del-acc-sheet" data-for="acc-edit">Удалить счёт</button>
 </div>
 
 <div class="toast" id="toast"></div>
