@@ -691,6 +691,8 @@ document.addEventListener('click', e => {
   else if (a === 'month') shiftMonth(+el.dataset.dir);
   else if (a === 'add') openSheet(state.tab === 'debts' ? 'debt' : state.tab === 'accounts' ? 'account' : 'expense');
   else if (a === 'add-account') openSheet('account');
+  else if (a === 'backup') exportBackup();
+  else if (a === 'restore') $('#bkFile').click();
   else if (a === 'close') closeSheet();
   else if (a === 'save') save();
   else if (a === 'seg') { setMode(el.dataset.mode); haptic.select(); }
@@ -715,12 +717,16 @@ document.addEventListener('click', e => {
 });
 
 /* ---------- Быстрое добавление по ссылке (кнопка «Действие» на iPhone) ----------
-   t.me/<бот>/<app>?startapp=add             → открыть шторку траты
-   t.me/<бот>/<app>?startapp=a-450-food      → сразу записать 450 ₽ в «Продукты»
-   t.me/<бот>/<app>?startapp=a-450-food-1    → … со счёта №2 (нумерация с 0)      */
+   Сайт:     …/finance/?q=add            → открыть шторку траты
+             …/finance/?q=a-450-food     → сразу записать 450 ₽ в «Продукты»
+             …/finance/?q=a-450-food-1   → … со счёта №2 (нумерация с 0)
+   Telegram: t.me/<бот>/<app>?startapp=a-450-food  — то же самое                    */
+const inTelegram = !!tg?.initData;
 async function handleStartParam() {
-  const sp = tg?.initDataUnsafe?.start_param;
+  const url = new URL(location.href);
+  const sp = tg?.initDataUnsafe?.start_param || url.searchParams.get('q');
   if (!sp) return;
+  if (url.searchParams.has('q')) history.replaceState(null, '', url.pathname); // чтобы обновление страницы не добавило трату ещё раз
   if (sp === 'add') return openSheet('expense');
   const [cmd, amt, cat, accIdx] = sp.split('-');
   const amount = parseInt(amt, 10);
@@ -731,8 +737,66 @@ async function handleStartParam() {
   haptic.ok();
   toast(`−${fmt(amount)} · ${CAT[cat].name}`);
   await saveChain;
-  setTimeout(() => tg.close(), 900);
+  if (inTelegram) setTimeout(() => tg.close(), 900);
 }
+
+/* ---------- Резервная копия ---------- */
+function backupData() {
+  const items = {};
+  for (const k of Object.keys(chunkIndex)) {
+    if (k === '_t') continue;
+    let str = '';
+    for (let i = 0; i < chunkIndex[k]; i++) str += LS.get(`${k}_${i}`);
+    items[k] = str;
+  }
+  return { app: 'finance', v: 1, created: new Date().toISOString(), items };
+}
+async function exportBackup() {
+  const name = `finance-backup-${isoDate(new Date())}.json`;
+  const file = new File([JSON.stringify(backupData())], name, { type: 'application/json' });
+  try {
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Резервная копия расходов' });
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }
+    LS.set('lastBackup', String(Date.now()));
+    renderBackupInfo();
+    toast('Копия сохранена');
+  } catch (e) {
+    if (e?.name !== 'AbortError') toast('Не удалось сохранить копию');
+  }
+}
+async function importBackup(file) {
+  let data;
+  try { data = JSON.parse(await file.text()); } catch (e) { return toast('Это не файл копии'); }
+  if (data?.app !== 'finance' || !data.items) return toast('Это не файл копии');
+  const date = data.created ? shortDate(new Date(data.created)) : '';
+  confirmBox(`Восстановить копию${date ? ' от ' + date : ''}? Текущие данные заменятся.`, async () => {
+    // удаляем то, чего нет в копии, и записываем всё из копии
+    for (const k of Object.keys(chunkIndex)) if (k !== '_t' && !(k in data.items)) persist(k, '');
+    for (const [k, v] of Object.entries(data.items)) persist(k, v);
+    await saveChain;
+    location.reload();
+  });
+}
+function renderBackupInfo() {
+  const el = $('#bkInfo');
+  if (!el) return;
+  const t = +LS.get('lastBackup');
+  if (!t) { el.textContent = 'Копий ещё не было'; el.classList.toggle('warn', accounts.length > 0); return; }
+  const days = Math.floor((Date.now() - t) / 864e5);
+  el.textContent = days === 0 ? 'Последняя копия: сегодня' : `Последняя копия: ${days} ${plural(days, ['день', 'дня', 'дней'])} назад`;
+  el.classList.toggle('warn', days >= 14);
+}
+$('#bkFile').addEventListener('change', e => {
+  const f = e.target.files?.[0];
+  if (f) importBackup(f);
+  e.target.value = '';
+});
 
 /* ---------- Старт ---------- */
 $$('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon, el.classList.contains('fab') ? 24 : el.classList.contains('icon-btn') ? 18 : 20));
@@ -740,6 +804,8 @@ $$('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon, el.classLis
   try { await load(); } catch (e) { console.error(e); toast('Не удалось загрузить данные'); }
   state.acc = accounts[0]?.id || null;
   renderAll();
+  renderBackupInfo();
   document.body.classList.remove('loading');
+  navigator.storage?.persist?.().catch(() => {});   // просим браузер не чистить данные
   handleStartParam();
 })();

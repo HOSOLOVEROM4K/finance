@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <title>Расходы</title>
+  <meta name="theme-color" content="#0d0e10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Расходы">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="icon" href="icon.png">
+  <link rel="manifest" href="manifest.json">
   <!-- скрипт Telegram лежит в репозитории; если его нет — грузим с telegram.org -->
   <script src="telegram-web-app.js"></script>
   <script>window.Telegram || document.write('<script src="https://telegram.org/js/telegram-web-app.js"><\/script>');</script>
@@ -103,6 +111,19 @@
     <div class="stack" id="acStack"></div>
     <div class="card list-card" id="acList"></div>
     <button class="btn btn-ghost" data-action="add-account">Добавить счёт</button>
+
+    <div class="section-label">Данные</div>
+    <div class="card backup-card">
+      <div class="backup-text">
+        <div>Резервная копия</div>
+        <div class="tx-sub" id="bkInfo"></div>
+      </div>
+      <div class="backup-btns">
+        <button class="settle" data-action="restore">Восстановить</button>
+        <button class="settle primary" data-action="backup">Сохранить</button>
+      </div>
+      <input type="file" id="bkFile" accept=".json,application/json" hidden>
+    </div>
   </section>
 
 </main>
