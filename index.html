@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Расходы</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="loading">
+
+<main class="app">
+
+  <!-- ОБЗОР -->
+  <section class="screen active" id="screen-overview">
+    <header class="topbar">
+      <div class="title" data-month-label></div>
+      <div class="month-switch">
+        <button class="icon-btn" data-action="month" data-dir="-1" data-icon="chevL"></button>
+        <button class="icon-btn" data-action="month" data-dir="1" data-icon="chevR"></button>
+      </div>
+    </header>
+
+    <div class="hero">
+      <div class="eyebrow">Потрачено за месяц</div>
+      <div class="hero-amount num" id="ovTotal"></div>
+      <div class="hero-sub" id="ovDelta"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span>Категории</span><button class="link" data-action="tab" data-tab="expenses">Подробнее</button></div>
+      <div class="stack" id="ovStack"></div>
+      <ul class="cat-rows" id="ovCats"></ul>
+    </div>
+
+    <div class="mini-grid">
+      <button class="mini" data-action="tab" data-tab="debts">
+        <span class="eyebrow">Мне должны</span>
+        <b class="num" id="ovDebts"></b>
+        <small id="ovDebtsSub"></small>
+      </button>
+      <button class="mini" data-action="tab" data-tab="accounts">
+        <span class="eyebrow">Всего денег</span>
+        <b class="num" id="ovMoney"></b>
+        <small id="ovMoneySub"></small>
+      </button>
+    </div>
+
+    <div class="card list-card">
+      <div class="card-head pad-top"><span>Последние</span><button class="link" data-action="tab" data-tab="expenses">Все</button></div>
+      <div id="ovRecent"></div>
+    </div>
+  </section>
+
+  <!-- ТРАТЫ -->
+  <section class="screen" id="screen-expenses">
+    <header class="topbar">
+      <div class="title" data-month-label></div>
+      <div class="month-switch">
+        <button class="icon-btn" data-action="month" data-dir="-1" data-icon="chevL"></button>
+        <button class="icon-btn" data-action="month" data-dir="1" data-icon="chevR"></button>
+      </div>
+    </header>
+    <div class="card chart-card">
+      <div class="donut-wrap">
+        <svg viewBox="0 0 100 100" id="exDonut"></svg>
+        <div class="donut-center"><b class="num" id="exTotal"></b><span id="exCount"></span></div>
+      </div>
+    </div>
+    <div class="chips" id="exChips"></div>
+    <div id="exList"></div>
+  </section>
+
+  <!-- ДОЛГИ -->
+  <section class="screen" id="screen-debts">
+    <header class="topbar"><div class="title">Долги</div></header>
+    <div class="hero">
+      <div class="eyebrow">Мне должны</div>
+      <div class="hero-amount num" id="dbTotal"></div>
+      <div class="hero-sub" id="dbSub"></div>
+    </div>
+    <div class="card list-card" id="dbActive"></div>
+    <div id="dbClosedWrap">
+      <div class="section-label">Вернули</div>
+      <div class="card list-card" id="dbClosed"></div>
+    </div>
+  </section>
+
+  <!-- СЧЕТА -->
+  <section class="screen" id="screen-accounts">
+    <header class="topbar">
+      <div class="title">Счета</div>
+      <button class="text-btn" data-action="acc-edit" id="acEditBtn">Изменить</button>
+    </header>
+    <div class="hero">
+      <div class="eyebrow">Всего денег</div>
+      <div class="hero-amount num" id="acTotal"></div>
+      <div class="hero-sub" id="acSub"></div>
+    </div>
+    <div class="stack" id="acStack"></div>
+    <div class="card list-card" id="acList"></div>
+    <button class="btn btn-ghost" data-action="add-account">Добавить счёт</button>
+  </section>
+
+</main>
+
+<!-- НИЖНЯЯ НАВИГАЦИЯ -->
+<nav class="tabbar">
+  <div class="tabbar-inner">
+    <button class="tab active" data-action="tab" data-tab="overview"><span data-icon="chart"></span>Обзор</button>
+    <button class="tab" data-action="tab" data-tab="expenses"><span data-icon="list"></span>Траты</button>
+    <button class="fab" data-action="add" data-icon="plus" aria-label="Добавить"></button>
+    <button class="tab" data-action="tab" data-tab="debts"><span data-icon="users"></span>Долги</button>
+    <button class="tab" data-action="tab" data-tab="accounts"><span data-icon="wallet"></span>Счета</button>
+  </div>
+</nav>
+
+<!-- ШТОРКА ДОБАВЛЕНИЯ -->
+<div class="backdrop" data-action="close"></div>
+<div class="sheet" id="sheet">
+  <div class="grabber"></div>
+  <div class="segment">
+    <button data-action="seg" data-mode="expense">Трата</button>
+    <button data-action="seg" data-mode="debt">Долг</button>
+    <button data-action="seg" data-mode="account">Счёт</button>
+  </div>
+
+  <label class="amount-field" id="fAmountWrap">
+    <input id="fAmount" class="num" inputmode="numeric" placeholder="0" autocomplete="off">
+    <span class="cur">₽</span>
+  </label>
+
+  <div data-for="expense">
+    <div class="cat-grid" id="fCats"></div>
+    <div class="more-panel" id="fMore" hidden>
+      <div class="chips wrap" id="fExtra"></div>
+      <div class="add-cat" id="fAddCat" hidden>
+        <input id="fCatName" placeholder="Название категории" maxlength="20" autocomplete="off">
+        <button data-action="create-cat">Добавить</button>
+      </div>
+    </div>
+    <div class="field-label">Списать со счёта</div>
+    <div class="chips sheet-chips" id="fAccs"></div>
+  </div>
+
+  <div class="type-grid" id="fTypes" data-for="account"></div>
+
+  <label class="field" data-for="debt account" id="fNameWrap">
+    <span id="fNameIcon"></span><input id="fName" placeholder="Кто должен" autocomplete="off">
+  </label>
+  <label class="field" data-for="expense debt">
+    <span data-icon="note"></span><input id="fNote" placeholder="Комментарий" autocomplete="off">
+  </label>
+  <label class="field" data-for="expense debt">
+    <span data-icon="calendar"></span><input id="fDate" type="date">
+  </label>
+
+  <button class="btn" data-action="save" id="fSave">Сохранить</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
