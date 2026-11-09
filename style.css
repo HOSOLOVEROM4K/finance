@@ -419,3 +419,7 @@ body.loading .app, body.loading .tabbar { opacity: 0; }
 .swap-src { animation: none; border-color: var(--accent) !important; background: #c9b98f1a !important; color: var(--text); }
 .chip.swap-src { color: var(--text); }
 .cat-opt.dim { opacity: .35; }
+
+/* пустые строки под суммой не занимают место */
+.hero-sub:empty { display: none; }
+.donut-center span:empty { display: none; }

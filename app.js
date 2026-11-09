@@ -438,7 +438,6 @@ const state = {
   editOp: null,
   trFrom: null,
   trTo: null,
-  optRepeat: false,
   limitCat: 'cafe',
   swapFrom: null,     // категория, которую переставляем
   goalAcc: null,
@@ -491,17 +490,8 @@ function renderOverview() {
     const less = pct <= 0;
     $('#ovDelta').innerHTML = `<span class="${less ? 'pos' : 'neg'}">${icon(less ? 'down' : 'up', 14)}${Math.abs(pct)}%</span> ${less ? 'меньше' : 'больше'}, чем в ${MONTHS_PREP[pm]}`;
   } else {
-    $('#ovDelta').textContent = total ? 'Нет данных за прошлый месяц' : 'Трат пока нет';
+    $('#ovDelta').textContent = '';
   }
-
-  // темп и прогноз
-  const dim = daysIn(y, m);
-  if (total && isCurrentMonth() && today.getDate() >= 5) {
-    const perDay = total / today.getDate();
-    $('#ovPace').innerHTML = `≈ ${fmt(perDay)} в день · к концу месяца ≈ <b>${fmt(perDay * dim)}</b>`;
-  } else if (total) {
-    $('#ovPace').textContent = `≈ ${fmt(total / (isCurrentMonth() ? today.getDate() : dim))} в день`;
-  } else $('#ovPace').textContent = '';
 
   const inc = sum(monthIncome());
   const net = inc - total;
@@ -637,16 +627,15 @@ function renderExpenses() {
   else if (isTr) list = sortDesc(trList);
   else list = sortDesc(all.filter(e => e.cat === f));
 
-  const opsN = n => `${n} ${plural(n, ['операция', 'операции', 'операций'])}`;
   if (f === 'all') {
     $('#exTotal').textContent = fmt(sum(all));
-    $('#exCount').textContent = `потрачено · ${opsN(all.length)}`;
+    $('#exCount').textContent = '';
   } else if (isInc) {
     $('#exTotal').innerHTML = `<span class="pos">+${fmt(dTotal)}</span>`;
-    $('#exCount').textContent = `доходы · ${opsN(incList.length)}`;
+    $('#exCount').textContent = 'доходы';
   } else if (isTr) {
     $('#exTotal').textContent = fmt(sum(trList));
-    $('#exCount').textContent = `переводы · ${opsN(trList.length)}`;
+    $('#exCount').textContent = 'переводы';
   } else {
     const shown = sum(list);
     $('#exTotal').textContent = fmt(shown);
@@ -981,9 +970,6 @@ function renderLimitCats() {
 function renderGoalAccs() {
   $('#fGoalAccs').innerHTML = accChips(state.goalAcc, 'pick-goal-acc');
 }
-function renderOpts() {
-  $('#fOptRepeat').classList.toggle('on', state.optRepeat);
-}
 
 function setMode(mode) {
   state.mode = mode;
@@ -997,7 +983,6 @@ function setMode(mode) {
     : { 'acc-edit': 'Изменить счёт', limit: 'Лимит на месяц', goal: goal ? 'Цель накоплений' : 'Новая цель' }[mode];
   $('#fTitle').hidden = !title;
   $('#fTitle').textContent = title || '';
-  $('#fOpts').hidden = mode !== 'expense' || editing;
 
   let del = '';
   if (editing) del = { expense: 'Удалить трату', income: 'Удалить доход', transfer: 'Удалить перевод' }[mode];
@@ -1020,7 +1005,7 @@ function setMode(mode) {
     limit: 'Сохранить лимит', goal: 'Сохранить цель',
   }[mode];
 
-  if (mode === 'expense') { renderCatGrid(); renderOpts(); }
+  if (mode === 'expense') renderCatGrid();
   if (mode === 'income') renderIncGrid();
   if (mode === 'expense' || mode === 'income') renderAccPicker();
   if (mode === 'transfer') {
@@ -1040,7 +1025,7 @@ function sizeAmount() {
 function openSheet(mode, opts = {}) {
   fAmount.value = ''; fName.value = ''; fNote.value = ''; fDate.value = isoDate(today);
   $('#fCatName').value = ''; $('#fAddCat').hidden = true;
-  Object.assign(state, { moreOpen: false, editAcc: null, editOp: null, optRepeat: false, swapFrom: null });
+  Object.assign(state, { moreOpen: false, editAcc: null, editOp: null, swapFrom: null });
 
   if (mode === 'debt') { state.debtDir = state.tab === 'debts' ? state.debtView : 'in'; state.debtAcc = null; }
   if (opts.op) {
@@ -1198,13 +1183,6 @@ function save() {
       if (old) { keep = { id: old.id, ts: old.ts }; removeOp(old); }
     }
     addOp(kind, data, keep);
-    if (kind === 'exp' && !state.editOp) {
-      const tplNote = note || CAT[data.cat].name;
-      if (state.optRepeat) {
-        recurring.push({ id: uid(), day: date.getDate(), amount, cat: data.cat, acc: data.acc, note: tplNote, last: monthTag(date.getFullYear(), date.getMonth()) });
-        saveRecurring();
-      }
-    }
     if (kind === 'exp') message = limitNotice(data.cat, date) || message;
     if (date <= today) state.month = new Date(y, m - 1, 1);
   } else if (mode === 'transfer') {
@@ -1318,7 +1296,6 @@ document.addEventListener('click', e => {
     case 'acc-type': state.accType = el.dataset.type; renderTypeGrid(); haptic.select(); break;
     case 'debt-dir': state.debtDir = el.dataset.dir; renderDebtDir(); haptic.select(); break;
     case 'debt-view': state.debtView = el.dataset.view; renderDebts(); haptic.select(); break;
-    case 'opt-repeat': state.optRepeat = !state.optRepeat; renderOpts(); haptic.select(); break;
     case 'sugg': {
       const s = suggestions[+el.dataset.i];
       if (!s) break;
